@@ -7,9 +7,10 @@ import pytest
 from crawler.__main__ import main
 from crawler.sources import gmaps
 
-FIXTURE = json.loads(
-    (Path(__file__).parent / "fixtures" / "gmaps" / "search_payloads.json").read_text(encoding="utf-8")
-)
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "gmaps" / "search_payloads.json"
+if not FIXTURE_PATH.exists():  # scraped data is git-ignored (public repo); the owner's machine has it
+    pytest.skip("tests/fixtures/gmaps not present", allow_module_level=True)
+FIXTURE = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 LIST, SINGLE = FIXTURE["list"], FIXTURE["single"]  # real payloads from the DC-05 spikes, trimmed
 AT = "2026-11-01T07:00:00.000Z"
 

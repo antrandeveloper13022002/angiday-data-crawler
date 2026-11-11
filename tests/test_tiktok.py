@@ -9,6 +9,8 @@ from crawler.__main__ import main
 from crawler.sources import tiktok
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tiktok" / "search_items.json"
+if not FIXTURE.exists():  # scraped data is git-ignored (public repo); the owner's machine has it
+    pytest.skip("tests/fixtures/tiktok not present", allow_module_level=True)
 NATIVE = json.loads(FIXTURE.read_text(encoding="utf-8"))  # real search items from DC-01, trimmed
 FULL, PHOTO, BARE = NATIVE  # subtitles + location; photo post; no location
 FOODREVIEW_URL = re.compile(r"^https://www\.tiktok\.com/@[\w.]+/(video|photo)/\d+$")  # FoodReview's toClip filter

@@ -10,3 +10,6 @@ __pycache__/
 build/
 data/
 vendor/**/output/
+
+# Scraped data (public repo): stays on the owner's machine
+tests/fixtures/
