@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-crawler"
+version = "0.1.0"
+description = "Self-hosted scrapers for FoodReview, writing Apify-shaped datasets"
+requires-python = ">=3.12"
+# Exact pins only; upgrades are deliberate, after reading the changelog (security.md).
+dependencies = ["playwright==1.64.1"]
+
+[project.optional-dependencies]
+dev = ["pytest==9.2.0", "ruff==0.17.3"]
+
+[tool.setuptools.packages.find]
+include = ["crawler*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["vendor", "spikes"]
+
+[tool.ruff.lint]
+extend-select = ["I", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: hits the real site — run with: pytest -m live"]
+addopts = "-m 'not live'"
