@@ -4,7 +4,7 @@ import argparse
 import logging
 import sys
 
-from crawler.sources import gmaps, tiktok
+from crawler.sources import gmaps, grab, tiktok
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -15,6 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     sources = parser.add_subparsers(dest="source", metavar="<source>", required=True)
     tiktok.register(sources)
     gmaps.register(sources)
+    grab.register(sources)
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):  # Vietnamese keywords in logs on a Windows console or pipe
         if hasattr(stream, "reconfigure"):
