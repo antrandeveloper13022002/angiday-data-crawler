@@ -145,6 +145,7 @@ SEARCH = json.loads(SEARCH_PATH.read_text(encoding="utf-8"))  # first result pag
         ("Phở", "Phở Khánh", False),
         ("Aha Food", "Aha Food - Nguyễn Quý Đức", True),
         ("Ăn vặt Hiệp Gà", "Ăn Vặt Hiệp Gà - Láng", True),
+        ("Bếp Cô Tư Restaurant", "Bếp Cô Tuyết - Xôi Khúc, Bánh Đa Cua", False),  # DC-10 run: run-together, whole words
     ],
 )
 def test_same_shop_agrees_with_foodreview(first, second, same):
@@ -164,6 +165,17 @@ def test_pick_hit_rules():
     assert grab.pick_hit(place, [hit(grab_id="../../x")]) is None  # an id that can't go into a URL
     near = hit(km=0.02, grab_id="5-BBBBBBBBBBBB")
     assert grab.pick_hit(place, [hit(), near])["id"] == "5-BBBBBBBBBBBB"  # the nearest
+    assert grab.pick_hit(place, [hit(), near], frozenset({"5-BBBBBBBBBBBB"}))["id"] == "5-AAAAAAAAAAAA"  # owner: wrong
+
+
+def test_rejects_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(grab, "REJECTS_FILE", tmp_path / "rejects.txt")
+    assert grab.read_rejects() == frozenset()  # no file: nothing rejected
+    grab.REJECTS_FILE.write_text("# header\n5-C2BGL3VCNBJ1C6  # Bếp Cô Tư -> Bếp Cô Tuyết\n\n", encoding="utf-8")
+    assert grab.read_rejects() == {"5-C2BGL3VCNBJ1C6"}
+    grab.REJECTS_FILE.write_text("../../x\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        grab.read_rejects()
 
 
 @pytest.mark.parametrize("term", list(SEARCH))

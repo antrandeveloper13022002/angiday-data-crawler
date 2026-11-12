@@ -44,6 +44,7 @@ SEARCH_URL = "https://food.grab.com/vn/vi/restaurants"
 SEARCH_API = "portal.grab.com/foodweb/guest/v2/search"
 MATCH_INDEX = ROOT / "data" / "state" / "grab-matches.json"  # place line → its restaurant id, or null
 IDS_FILE = ROOT / "data" / "state" / "grab-ids.txt"  # every matched id, the input of `grab menus --ids-file`
+REJECTS_FILE = ROOT / "data" / "state" / "grab-rejects.txt"  # ids the owner marked as a wrong match
 CENTRE = re.compile(r"^(.+?)\s+@\s*(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$")  # "name @ lat,lng"
 MAX_MATCH_M = 300  # FoodReview's APP-42 rule
 MAX_SEARCHES = 100  # per run: search is rate-limited harder than restaurant pages (DC-10 spike)
@@ -149,16 +150,19 @@ def same_shop(first: str, second: str) -> bool:
     joined = "".join(short)
     if len(joined) < 3:
         return False
-    return all(word in other for word in short) or (len(joined) >= 4 and joined in "".join(other))
+    # run-together only over whole words: "Yang Bu Tong" ↔ "Yangbutong", but "Bếp Cô Tư" ↮ "Bếp Cô Tuyết"
+    runs = {"".join(other[i:j]) for i in range(len(other)) for j in range(i + 1, len(other) + 1)}
+    return all(word in other for word in short) or (len(joined) >= 4 and joined in runs)
 
 
-def pick_hit(name: str, hits: list[dict]) -> dict | None:
+def pick_hit(name: str, hits: list[dict], rejects: frozenset[str] = frozenset()) -> dict | None:
     """The nearest search hit that is the place: within MAX_MATCH_M (Grab's distance is from the search point, the
-    place) and the same name. None when no hit is."""
+    place) and the same name, and not an id the owner marked wrong. None when no hit is."""
     good = [
         hit
         for hit in hits
         if GRAB_ID.fullmatch(str(hit.get("id", "")))
+        and hit["id"] not in rejects
         and isinstance(distance_km(hit), float | int)
         and distance_km(hit) * 1000 <= MAX_MATCH_M
         and same_shop(name, (hit.get("address") or {}).get("name") or "")
@@ -286,7 +290,9 @@ def set_location(context, cookie: dict, lat: float, lng: float) -> None:
     context.add_cookies([{**{key: cookie[key] for key in keep if key in cookie}, "name": "location", "value": value}])
 
 
-def search_place(page, name: str, pages: int, pace: float) -> tuple[list[dict], dict | None, str]:
+def search_place(
+    page, name: str, pages: int, pace: float, rejects: frozenset[str]
+) -> tuple[list[dict], dict | None, str]:
     """Searches `name` and scrolls for more result pages until a hit is the place, `pages` pages are read, every result
     is in, or 3 scrolls bring nothing. Returns (search answers, the matching hit or None, "ok" | "blocked")."""
     responses = []
@@ -328,7 +334,7 @@ def search_place(page, name: str, pages: int, pace: float) -> tuple[list[dict], 
             hits = [
                 hit for a in answers for hit in ((a["payload"].get("searchResult") or {}).get("searchMerchants") or [])
             ]
-            match = pick_hit(name, hits)
+            match = pick_hit(name, hits, rejects)
             if match or len(answers) >= pages or (total is not None and len(hits) >= total):
                 return answers, match, "ok"
             if not answers:
@@ -349,7 +355,7 @@ def search_place(page, name: str, pages: int, pace: float) -> tuple[list[dict], 
         page.remove_listener("response", keep)
 
 
-def search_all(context, page, run: core.Run, lines: list[str], pages: int) -> None:
+def search_all(context, page, run: core.Run, lines: list[str], pages: int, rejects: frozenset[str]) -> None:
     """Each place in turn, paced (performance.md); its match (or none) lands in the index as it comes."""
     page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=45_000)  # Grab sets its `location` cookie here
     page.wait_for_timeout(5000)
@@ -362,7 +368,7 @@ def search_all(context, page, run: core.Run, lines: list[str], pages: int) -> No
             time.sleep(random.uniform(6, 12) * pace)  # between searches
         name, lat, lng = parse_place(line)
         set_location(context, cookie, lat, lng)
-        answers, match, outcome = search_place(page, name, pages, pace)
+        answers, match, outcome = search_place(page, name, pages, pace, rejects)
         if outcome == "blocked":
             blocks += 1
             log.warning("%r: blocked (%d of %d in a row)", name, blocks, MAX_BLOCKS)
@@ -393,9 +399,18 @@ def search_all(context, page, run: core.Run, lines: list[str], pages: int) -> No
         )
 
 
-def write_ids() -> int:
+def read_rejects() -> frozenset[str]:
+    """data/state/grab-rejects.txt: ids the owner marked as a wrong match, one per line, `# note` allowed."""
+    if not REJECTS_FILE.exists():
+        return frozenset()
+    lines = REJECTS_FILE.read_text(encoding="utf-8").splitlines()
+    return frozenset(restaurant_id(line.split("#")[0]) for line in lines if line.split("#")[0].strip())
+
+
+def write_ids(rejects: frozenset[str]) -> int:
     """data/state/grab-ids.txt: every restaurant id a search matched, one per line, for `grab menus --ids-file`."""
-    ids = list(dict.fromkeys(e["restaurantId"] for e in core.read_done(MATCH_INDEX).values() if e["restaurantId"]))
+    matched = (e["restaurantId"] for e in core.read_done(MATCH_INDEX).values() if e["restaurantId"])
+    ids = list(dict.fromkeys(grab_id for grab_id in matched if grab_id not in rejects))
     core.write_text(IDS_FILE, "".join(f"{grab_id}\n" for grab_id in ids), overwrite=True)
     return len(ids)
 
@@ -424,6 +439,7 @@ def search(args: argparse.Namespace) -> int:
         )
         for line in lines:
             parse_place(line)
+        rejects = read_rejects()
     except (OSError, ValueError) as error:
         log.error("%s", error)
         return 2
@@ -431,7 +447,7 @@ def search(args: argparse.Namespace) -> int:
         log.error("no places: give --place and/or --places-file")
         return 2
     done = {} if args.refresh else core.read_done(MATCH_INDEX)
-    todo = [line for line in lines if line not in done]
+    todo = [line for line in lines if line not in done or done[line]["restaurantId"] in rejects]  # rejected: again
     log.info("%d places: %d already searched, %d to search", len(lines), len(lines) - len(todo), len(todo))
     if todo:
         if len(todo) > MAX_SEARCHES:
@@ -449,7 +465,7 @@ def search(args: argparse.Namespace) -> int:
             try:
                 context = browser.new_context(locale="vi-VN", viewport={"width": 1366, "height": 900})
                 with core.Run("grab-search", run_input) as run:
-                    search_all(context, context.new_page(), run, run_input["places"], args.pages)
+                    search_all(context, context.new_page(), run, run_input["places"], args.pages, rejects)
             except Blocked as error:
                 log.error("stopped: %s — what was found is saved", error)
                 status = 1
@@ -459,7 +475,7 @@ def search(args: argparse.Namespace) -> int:
                 browser.close()
     else:
         status = 0
-    log.info("%d matched restaurant ids → %s", write_ids(), IDS_FILE)
+    log.info("%d matched restaurant ids → %s", write_ids(rejects), IDS_FILE)
     return status
 
 
